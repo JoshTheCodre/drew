@@ -11,14 +11,14 @@ import {
   economics,
   myMatches,
   openChallenges,
-  sweep,
 } from "@/lib/games/wordle-duel/engine";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    await sweep();
+    scheduleHousekeeping();
     const user = await currentUser();
 
     const [wallet, challenges, mine, standings] = await Promise.all([

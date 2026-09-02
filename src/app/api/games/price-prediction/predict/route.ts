@@ -1,10 +1,11 @@
 import { requireUser } from "@/lib/auth";
 import { fail, json, readJson } from "@/lib/api";
-import { GameError, roundById, submitPrediction, tick } from "@/lib/games/price-prediction/engine";
+import { GameError, roundById, submitPrediction } from "@/lib/games/price-prediction/engine";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export async function POST(req: Request) {
   try {
-    await tick();
+    scheduleHousekeeping();
     const user = await requireUser();
     const body = await readJson(req);
 

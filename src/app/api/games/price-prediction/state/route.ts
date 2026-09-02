@@ -6,16 +6,16 @@ import {
   leaderboard,
   recentRounds,
   sparkline,
-  tick,
 } from "@/lib/games/price-prediction/engine";
 import { nowMs } from "@/lib/clock";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
 
 /** One call powers the whole game screen: rounds, prices, history, standings. */
 export async function GET() {
   try {
-    await tick();
+    scheduleHousekeeping();
     const user = await currentUser();
     const prices = await getPrices();
 

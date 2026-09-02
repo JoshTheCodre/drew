@@ -1,6 +1,5 @@
 import { fail, json } from "@/lib/api";
-import { tick } from "@/lib/games/price-prediction/engine";
-import { sweep } from "@/lib/games/wordle-duel/engine";
+import { runSchedulers } from "@/lib/schedule";
 import { nowMs } from "@/lib/clock";
 
 export const dynamic = "force-dynamic";
@@ -19,8 +18,7 @@ async function run(req: Request) {
         url.searchParams.get("secret") ?? req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
       if (provided !== secret) return json({ error: "Unauthorized" }, { status: 401 });
     }
-    await tick();
-    await sweep();
+    await runSchedulers();
     return json({ ok: true, at: nowMs() });
   } catch (error) {
     return fail(error);

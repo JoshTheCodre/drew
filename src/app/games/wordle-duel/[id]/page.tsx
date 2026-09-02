@@ -2,14 +2,15 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import { nowMs } from "@/lib/clock";
-import { sweep, viewMatch } from "@/lib/games/wordle-duel/engine";
+import { viewMatch } from "@/lib/games/wordle-duel/engine";
 import { DuelBoard } from "@/components/wordle-duel/DuelBoard";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export const metadata: Metadata = { title: "Duel" };
 export const dynamic = "force-dynamic";
 
 export default async function MatchPage({ params }: { params: Promise<{ id: string }> }) {
-  await sweep();
+  scheduleHousekeeping();
   const { id } = await params;
   const user = await currentUser();
   const match = await viewMatch(id, user?.id);

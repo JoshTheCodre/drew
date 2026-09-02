@@ -8,15 +8,15 @@ import {
   forfeitMatch,
   joinMatch,
   submitGuess,
-  sweep,
   viewMatch,
 } from "@/lib/games/wordle-duel/engine";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    await sweep();
+    scheduleHousekeeping();
     const { id } = await ctx.params;
     const user = await currentUser();
     const match = await viewMatch(id, user?.id);

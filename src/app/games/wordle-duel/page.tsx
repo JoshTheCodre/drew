@@ -11,15 +11,15 @@ import {
   economics,
   myMatches,
   openChallenges,
-  sweep,
 } from "@/lib/games/wordle-duel/engine";
 import { DuelLobby } from "@/components/wordle-duel/DuelLobby";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export const metadata: Metadata = { title: "Wordle Duel" };
 export const dynamic = "force-dynamic";
 
 export default async function WordleDuelPage() {
-  await sweep();
+  scheduleHousekeeping();
   const user = await currentUser();
 
   const [wallet, challenges, mine, standings] = await Promise.all([

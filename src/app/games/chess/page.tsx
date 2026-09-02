@@ -10,15 +10,15 @@ import {
   economics,
   myMatches,
   openChallenges,
-  sweep,
 } from "@/lib/games/chess/engine";
 import { ChessLobby } from "@/components/chess/ChessLobby";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export const metadata: Metadata = { title: "Chess Stakes" };
 export const dynamic = "force-dynamic";
 
 export default async function ChessPage() {
-  await sweep();
+  scheduleHousekeeping();
   const user = await currentUser();
 
   const [wallet, challenges, mine] = await Promise.all([

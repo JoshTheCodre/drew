@@ -1,19 +1,20 @@
 import Link from "next/link";
 import { GAMES } from "@/lib/games/registry";
 import { MARKETS, getPrices } from "@/lib/markets";
-import { activeRounds, leaderboard, tick } from "@/lib/games/price-prediction/engine";
-import { openChallenges, sweep } from "@/lib/games/wordle-duel/engine";
+import { activeRounds, leaderboard } from "@/lib/games/price-prediction/engine";
+import { openChallenges } from "@/lib/games/wordle-duel/engine";
 import { currentUser } from "@/lib/auth";
 import { arcadeStats, EMPTY_STATS } from "@/lib/stats";
 import { nowMs } from "@/lib/clock";
 import { formatCents } from "@/lib/format";
 import { ArcadeLive } from "@/components/ArcadeLive";
 import { Marquee } from "@/components/Marquee";
+import { scheduleHousekeeping } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  await Promise.all([tick().catch(() => {}), sweep().catch(() => {})]);
+  scheduleHousekeeping();
 
   const user = await currentUser();
   const prices = await getPrices();
