@@ -3,16 +3,15 @@ import { fail, json } from "@/lib/api";
 import { getWallet } from "@/lib/wallet";
 import { nowMs } from "@/lib/clock";
 import {
-  MATCH_SECONDS,
-  MAX_GUESSES,
+  BASE_SECONDS,
+  INCREMENT_SECONDS,
   RAKE_BPS,
   STAKE_PRESETS_CENTS,
-  duelStandings,
   economics,
   myMatches,
   openChallenges,
   sweep,
-} from "@/lib/games/wordle-duel/engine";
+} from "@/lib/games/chess/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +20,10 @@ export async function GET() {
     await sweep();
     const user = await currentUser();
 
-    const [wallet, challenges, mine, standings] = await Promise.all([
+    const [wallet, challenges, mine] = await Promise.all([
       user ? getWallet(user.id) : Promise.resolve(null),
       openChallenges(user?.id),
       user ? myMatches(user.id) : Promise.resolve([]),
-      duelStandings(),
     ]);
 
     return json({
@@ -34,12 +32,11 @@ export async function GET() {
       wallet,
       challenges,
       mine,
-      standings,
       config: {
         stakePresets: STAKE_PRESETS_CENTS.map((cents) => ({ cents, ...economics(cents) })),
         rakeBps: RAKE_BPS,
-        matchSeconds: MATCH_SECONDS,
-        maxGuesses: MAX_GUESSES,
+        baseSeconds: BASE_SECONDS,
+        incrementSeconds: INCREMENT_SECONDS,
       },
     });
   } catch (error) {

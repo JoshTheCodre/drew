@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { currentUser } from "@/lib/auth";
 import { getWallet } from "@/lib/wallet";
+import { nowMs } from "@/lib/clock";
 import {
   MATCH_SECONDS,
   MAX_GUESSES,
@@ -18,18 +19,25 @@ export const metadata: Metadata = { title: "Wordle Duel" };
 export const dynamic = "force-dynamic";
 
 export default async function WordleDuelPage() {
-  sweep();
+  await sweep();
   const user = await currentUser();
+
+  const [wallet, challenges, mine, standings] = await Promise.all([
+    user ? getWallet(user.id) : Promise.resolve(null),
+    openChallenges(user?.id),
+    user ? myMatches(user.id) : Promise.resolve([]),
+    duelStandings(),
+  ]);
 
   return (
     <DuelLobby
       initial={{
-        now: Date.now(),
+        now: nowMs(),
         user,
-        wallet: user ? getWallet(user.id) : null,
-        challenges: openChallenges(user?.id),
-        mine: user ? myMatches(user.id) : [],
-        standings: duelStandings(),
+        wallet,
+        challenges,
+        mine,
+        standings,
         config: {
           stakePresets: STAKE_PRESETS_CENTS.map((cents) => ({ cents, ...economics(cents) })),
           rakeBps: RAKE_BPS,

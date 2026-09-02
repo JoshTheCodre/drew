@@ -10,7 +10,14 @@ export async function POST(req: Request) {
     const cents = Math.round(Number(body.amountCents));
     const destination = String(body.destination ?? "").trim() || "simulated-account";
     const wallet = await requestWithdrawal(user.id, cents, destination);
-    return json({ wallet, ledger: ledger(user.id, 30), payouts: payoutHistory(user.id) }, { status: 201 });
+    return json(
+      {
+        wallet,
+        ledger: await ledger(user.id, 30),
+        payouts: await payoutHistory(user.id),
+      },
+      { status: 201 },
+    );
   } catch (error) {
     return fail(error);
   }

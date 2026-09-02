@@ -25,8 +25,8 @@ export default async function LeaderboardPage({
 
   // Wordle Duel ranks by money won; everything else ranks by points.
   const isDuel = scope === "wordle-duel";
-  const pointRows = isDuel ? [] : leaderboard(scope, 50);
-  const duelRows = isDuel ? duelStandings(50) : [];
+  const pointRows = isDuel ? [] : await leaderboard(scope, 50);
+  const duelRows = isDuel ? await duelStandings(50) : [];
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-12">

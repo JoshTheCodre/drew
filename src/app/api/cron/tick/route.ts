@@ -1,10 +1,12 @@
 import { fail, json } from "@/lib/api";
 import { tick } from "@/lib/games/price-prediction/engine";
+import { sweep } from "@/lib/games/wordle-duel/engine";
+import { nowMs } from "@/lib/clock";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Round scheduler. Rounds also advance lazily on any read, so this only
+ * Scheduler. Rounds and duels also advance lazily on any read, so this only
  * matters for keeping things moving while nobody is watching.
  * Set CRON_SECRET and send it as ?secret= or an Authorization: Bearer header.
  */
@@ -18,7 +20,8 @@ async function run(req: Request) {
       if (provided !== secret) return json({ error: "Unauthorized" }, { status: 401 });
     }
     await tick();
-    return json({ ok: true, at: Date.now() });
+    await sweep();
+    return json({ ok: true, at: nowMs() });
   } catch (error) {
     return fail(error);
   }

@@ -1,7 +1,14 @@
 import { currentUser } from "@/lib/auth";
 import { fail, json } from "@/lib/api";
 import { MARKETS, getPrices } from "@/lib/markets";
-import { activeRounds, leaderboard, recentRounds, sparkline, tick } from "@/lib/games/price-prediction/engine";
+import {
+  activeRounds,
+  leaderboard,
+  recentRounds,
+  sparkline,
+  tick,
+} from "@/lib/games/price-prediction/engine";
+import { nowMs } from "@/lib/clock";
 
 export const dynamic = "force-dynamic";
 
@@ -12,18 +19,21 @@ export async function GET() {
     const user = await currentUser();
     const prices = await getPrices();
 
-    return json({
-      now: Date.now(),
-      user,
-      markets: MARKETS.map((m) => ({
+    const markets = await Promise.all(
+      MARKETS.map(async (m) => ({
         ...m,
         price: prices.get(m.id) ?? null,
-        history: sparkline(m.id, 90),
+        history: await sparkline(m.id, 90),
       })),
-      active: activeRounds(user?.id),
-      recent: recentRounds(6, user?.id),
-      leaderboard: leaderboard("price-prediction", 10),
-    });
+    );
+
+    const [active, recent, standings] = await Promise.all([
+      activeRounds(user?.id),
+      recentRounds(6, user?.id),
+      leaderboard("price-prediction", 10),
+    ]);
+
+    return json({ now: nowMs(), user, markets, active, recent, leaderboard: standings });
   } catch (error) {
     return fail(error);
   }

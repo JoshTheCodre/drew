@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/auth";
 import { fail, json, readJson } from "@/lib/api";
-import { createMatch, viewMatch } from "@/lib/games/wordle-duel/engine";
+import { createMatch, viewMatch } from "@/lib/games/chess/engine";
 
 export async function POST(req: Request) {
   try {

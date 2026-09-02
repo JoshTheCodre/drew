@@ -53,9 +53,9 @@ export const GAMES: GameDefinition[] = [
     name: "Chess Stakes",
     tagline: "Blitz chess, winner takes the pot.",
     description:
-      "5+3 blitz on the same escrow rails as Wordle Duel. The board and match screen are designed and clickable — the engine, clock and settlement are still to come.",
+      "5+3 blitz on the same escrow rails as Wordle Duel. Every move is validated server-side by chess.js; checkmate, resignation or a flag on time takes the pot.",
     href: "/games/chess",
-    status: "preview",
+    status: "live",
     emoji: "♟️",
     accent: "#fbbf24",
     players: "2",

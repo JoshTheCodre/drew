@@ -1,11 +1,13 @@
-import { db, tx } from "./db";
+import "server-only";
+import { COLLECTIONS, store } from "./firestore";
 import { newId } from "./ids";
-import { deposit as creditWallet, withdraw as debitWallet, ensureWallet, formatCents } from "./wallet";
+import { nowMs } from "./clock";
+import { formatCents, getWallet, withLedger, type Wallet } from "./wallet";
 
 /**
  * Payment rail. The simulated provider settles instantly and moves fake money;
  * a real provider (Stripe, Adyen, a payout API) implements the same two methods
- * and everything above this file is unchanged.
+ * and nothing above this file changes.
  */
 
 export const PROVIDER_ID = process.env.PAYMENTS_PROVIDER ?? "simulated";
@@ -16,7 +18,10 @@ export const MAX_DEPOSIT_CENTS = Number(process.env.MAX_DEPOSIT_CENTS ?? 500_000
 export const MIN_WITHDRAWAL_CENTS = 500;
 
 export class PaymentError extends Error {
-  constructor(message: string, readonly status = 400) {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
     super(message);
   }
 }
@@ -45,7 +50,7 @@ const simulatedProvider: PaymentProvider = {
     }
     return { ok: true, reference: newId("ch") };
   },
-  async sendPayout(_userId, _cents, _destination) {
+  async sendPayout() {
     return { ok: true, reference: newId("po"), status: "paid" };
   },
 };
@@ -54,7 +59,7 @@ export const payments: PaymentProvider = simulatedProvider;
 
 /* ------------------------------------------------------------------ */
 
-export async function makeDeposit(userId: string, cents: number) {
+export async function makeDeposit(userId: string, cents: number): Promise<Wallet> {
   if (!Number.isInteger(cents) || cents <= 0) throw new PaymentError("Enter an amount to add.");
   if (cents < MIN_DEPOSIT_CENTS) {
     throw new PaymentError(`Minimum deposit is ${formatCents(MIN_DEPOSIT_CENTS)}.`);
@@ -66,16 +71,23 @@ export async function makeDeposit(userId: string, cents: number) {
   const result = await payments.charge(userId, cents);
   if (!result.ok) throw new PaymentError(result.reason, 402);
 
-  return tx(() => creditWallet(userId, cents, result.reference, `Deposit via ${payments.id}`));
+  return withLedger([userId], (batch) => {
+    batch.deposit(userId, cents, result.reference, `Deposit via ${payments.id}`);
+    return batch.balance(userId);
+  });
 }
 
-export async function requestWithdrawal(userId: string, cents: number, destination: string) {
+export async function requestWithdrawal(
+  userId: string,
+  cents: number,
+  destination: string,
+): Promise<Wallet> {
   if (!Number.isInteger(cents) || cents <= 0) throw new PaymentError("Enter an amount to withdraw.");
   if (cents < MIN_WITHDRAWAL_CENTS) {
     throw new PaymentError(`Minimum withdrawal is ${formatCents(MIN_WITHDRAWAL_CENTS)}.`);
   }
 
-  const wallet = ensureWallet(userId);
+  const wallet = await getWallet(userId);
   if (wallet.availableCents < cents) {
     throw new PaymentError(
       `You can withdraw up to ${formatCents(wallet.availableCents)} — the rest is staked in live matches.`,
@@ -87,21 +99,21 @@ export async function requestWithdrawal(userId: string, cents: number, destinati
   if (!result.ok) throw new PaymentError(result.reason, 402);
 
   const payoutId = newId("pay");
-  return tx(() => {
-    db.prepare(
-      `INSERT INTO payouts (id, user_id, amount_cents, status, destination, provider_ref, created_at, settled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      payoutId,
+  const at = nowMs();
+
+  return withLedger([userId], (batch, tx) => {
+    // Throws before anything is written if the balance moved underneath us.
+    batch.withdraw(userId, cents, payoutId, `Withdrawal via ${payments.id}`);
+    tx.set(COLLECTIONS.payouts, payoutId, {
       userId,
-      cents,
-      result.status,
+      amountCents: cents,
+      status: result.status,
       destination,
-      result.reference,
-      Date.now(),
-      result.status === "paid" ? Date.now() : null,
-    );
-    return debitWallet(userId, cents, payoutId, `Withdrawal via ${payments.id}`);
+      providerRef: result.reference,
+      createdAt: at,
+      settledAt: result.status === "paid" ? at : null,
+    });
+    return batch.balance(userId);
   });
 }
 
@@ -113,24 +125,11 @@ export type PayoutRecord = {
   createdAt: number;
 };
 
-export function payoutHistory(userId: string, limit = 10): PayoutRecord[] {
-  const rows = db
-    .prepare(
-      "SELECT id, amount_cents, status, destination, created_at FROM payouts WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-    )
-    .all(userId, limit) as unknown as Array<{
-      id: string;
-      amount_cents: number;
-      status: string;
-      destination: string | null;
-      created_at: number;
-    }>;
-
-  return rows.map((r) => ({
-    id: r.id,
-    amountCents: r.amount_cents,
-    status: r.status,
-    destination: r.destination,
-    createdAt: r.created_at,
-  }));
+export async function payoutHistory(userId: string, max = 10): Promise<PayoutRecord[]> {
+  const db = await store();
+  const rows = await db.list<PayoutRecord>(COLLECTIONS.payouts, {
+    where: [["userId", "==", userId]],
+  });
+  // Sorted here rather than in the query, so no composite index is needed.
+  return rows.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
 }

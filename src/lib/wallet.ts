@@ -1,17 +1,23 @@
-import { db } from "./db";
+import "server-only";
+import { COLLECTIONS, store, type Tx } from "./firestore";
 import { newId } from "./ids";
+import { nowMs } from "./clock";
 import { formatCents } from "./format";
 
+export { formatCents, dollarsToCents } from "./format";
+
 /**
- * Simulated currency, real accounting. Every movement writes an append-only
- * ledger row, and a wallet's two buckets are the only mutable state:
+ * Simulated currency, real accounting.
  *
+ * Each wallet has two buckets:
  *   available — spendable now
  *   escrow    — committed to a live match, untouchable by either player
  *
- * Balances are held in integer cents; nothing here uses floating point.
- * Callers that move money for more than one user must wrap these calls in
- * a single `tx()` so a match settles all-or-nothing.
+ * Amounts are integer cents; nothing here touches floating point.
+ *
+ * Firestore transactions require every read before every write, so money moves
+ * through a LedgerBatch: load the wallets involved, apply moves in memory, then
+ * flush balances and the append-only ledger in one atomic write.
  */
 
 export const HOUSE_ACCOUNT = "house";
@@ -35,6 +41,7 @@ export type Wallet = {
 
 export type LedgerEntry = {
   id: string;
+  userId: string;
   kind: LedgerKind;
   availableDelta: number;
   escrowDelta: number;
@@ -47,190 +54,198 @@ export type LedgerEntry = {
 };
 
 export class WalletError extends Error {
-  constructor(message: string, readonly status = 400) {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
     super(message);
   }
 }
 
-type WalletRow = { user_id: string; available_cents: number; escrow_cents: number; currency: string };
+type WalletDoc = { availableCents: number; escrowCents: number; currency: string; updatedAt: number };
 
-export function ensureWallet(userId: string): Wallet {
-  const existing = db
-    .prepare("SELECT user_id, available_cents, escrow_cents, currency FROM wallets WHERE user_id = ?")
-    .get(userId) as unknown as WalletRow | undefined;
-
-  if (existing) {
-    return {
-      userId,
-      availableCents: existing.available_cents,
-      escrowCents: existing.escrow_cents,
-      currency: existing.currency,
-    };
-  }
-
-  db.prepare(
-    "INSERT INTO wallets (user_id, available_cents, escrow_cents, currency, updated_at) VALUES (?, 0, 0, 'USD', ?)",
-  ).run(userId, Date.now());
-  return { userId, availableCents: 0, escrowCents: 0, currency: "USD" };
-}
-
-export const getWallet = (userId: string): Wallet => ensureWallet(userId);
-
-type PostOptions = {
-  userId: string;
-  kind: LedgerKind;
-  availableDelta?: number;
-  escrowDelta?: number;
-  refType?: string;
-  refId?: string;
-  memo?: string;
-};
-
-/** The single write path for money. Never mutate `wallets` outside this. */
-function post({
+const emptyWallet = (userId: string): Wallet => ({
   userId,
-  kind,
-  availableDelta = 0,
-  escrowDelta = 0,
-  refType,
-  refId,
-  memo,
-}: PostOptions): Wallet {
-  const isHouse = userId === HOUSE_ACCOUNT;
-  const before = isHouse ? houseBalance() : ensureWallet(userId);
+  availableCents: 0,
+  escrowCents: 0,
+  currency: "USD",
+});
 
-  const availableAfter = before.availableCents + availableDelta;
-  const escrowAfter = before.escrowCents + escrowDelta;
-
-  if (availableAfter < 0) throw new WalletError("Not enough available balance.", 402);
-  if (escrowAfter < 0) throw new WalletError("Escrow accounting would go negative.", 500);
-
-  const now = Date.now();
-  if (!isHouse) {
-    db.prepare("UPDATE wallets SET available_cents = ?, escrow_cents = ?, updated_at = ? WHERE user_id = ?")
-      .run(availableAfter, escrowAfter, now, userId);
-  }
-
-  db.prepare(
-    `INSERT INTO ledger_entries
-       (id, user_id, kind, available_delta, escrow_delta, available_after, escrow_after, ref_type, ref_id, memo, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    newId("led"),
-    userId,
-    kind,
-    availableDelta,
-    escrowDelta,
-    availableAfter,
-    escrowAfter,
-    refType ?? null,
-    refId ?? null,
-    memo ?? null,
-    now,
-  );
-
-  return { userId, availableCents: availableAfter, escrowCents: escrowAfter, currency: before.currency };
-}
-
-/** The house has no wallet row — its balance is the sum of its ledger. */
-export function houseBalance(): Wallet {
-  const row = db
-    .prepare(
-      "SELECT COALESCE(SUM(available_delta), 0) AS a, COALESCE(SUM(escrow_delta), 0) AS e FROM ledger_entries WHERE user_id = ?",
-    )
-    .get(HOUSE_ACCOUNT) as unknown as { a: number; e: number };
-  return { userId: HOUSE_ACCOUNT, availableCents: row.a, escrowCents: row.e, currency: "USD" };
+export async function getWallet(userId: string): Promise<Wallet> {
+  const db = await store();
+  const doc = await db.get<WalletDoc>(COLLECTIONS.wallets, userId);
+  return doc
+    ? {
+        userId,
+        availableCents: doc.availableCents,
+        escrowCents: doc.escrowCents,
+        currency: doc.currency ?? "USD",
+      }
+    : emptyWallet(userId);
 }
 
 /* ------------------------------------------------------------------ */
-/* Operations                                                          */
+/* LedgerBatch — the only path money takes                             */
 /* ------------------------------------------------------------------ */
 
-export const deposit = (userId: string, cents: number, ref?: string, memo?: string) =>
-  post({ userId, kind: "deposit", availableDelta: cents, refType: "payment", refId: ref, memo });
-
-export const withdraw = (userId: string, cents: number, ref?: string, memo?: string) =>
-  post({ userId, kind: "withdrawal", availableDelta: -cents, refType: "payout", refId: ref, memo });
-
-/** Move a stake out of reach for the duration of a match. */
-export function hold(userId: string, cents: number, refId: string, memo?: string): Wallet {
-  const wallet = ensureWallet(userId);
-  if (wallet.availableCents < cents) {
-    throw new WalletError(
-      `You need ${formatCents(cents)} available to stake — you have ${formatCents(wallet.availableCents)}.`,
-      402,
-    );
-  }
-  return post({
-    userId,
-    kind: "stake_hold",
-    availableDelta: -cents,
-    escrowDelta: cents,
-    refType: "wd_match",
-    refId,
-    memo,
-  });
-}
-
-/** Give a held stake back (draw, cancellation, expiry). */
-export const releaseHold = (userId: string, cents: number, refId: string, memo?: string) =>
-  post({
-    userId,
-    kind: "stake_release",
-    availableDelta: cents,
-    escrowDelta: -cents,
-    refType: "wd_match",
-    refId,
-    memo,
-  });
-
-/** Loser's stake leaves escrow and does not come back. */
-export const forfeitHold = (userId: string, cents: number, refId: string, memo?: string) =>
-  post({ userId, kind: "stake_forfeit", escrowDelta: -cents, refType: "wd_match", refId, memo });
-
-/** Winnings on top of a released stake. */
-export const payout = (userId: string, cents: number, refId: string, memo?: string) =>
-  post({ userId, kind: "payout", availableDelta: cents, refType: "wd_match", refId, memo });
-
-export const takeRake = (cents: number, refId: string, memo?: string) =>
-  post({ userId: HOUSE_ACCOUNT, kind: "rake", availableDelta: cents, refType: "wd_match", refId, memo });
-
-/* ------------------------------------------------------------------ */
-
-type LedgerRow = {
-  id: string;
-  kind: LedgerKind;
-  available_delta: number;
-  escrow_delta: number;
-  available_after: number;
-  escrow_after: number;
-  ref_type: string | null;
-  ref_id: string | null;
-  memo: string | null;
-  created_at: number;
+type EntryDraft = Omit<LedgerEntry, "availableAfter" | "escrowAfter"> & {
+  availableAfter: number;
+  escrowAfter: number;
 };
 
-export function ledger(userId: string, limit = 30): LedgerEntry[] {
-  const rows = db
-    .prepare(
-      `SELECT id, kind, available_delta, escrow_delta, available_after, escrow_after,
-              ref_type, ref_id, memo, created_at
-         FROM ledger_entries WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
-    )
-    .all(userId, limit) as unknown as LedgerRow[];
+export class LedgerBatch {
+  private readonly balances = new Map<string, Wallet>();
+  private readonly entries: EntryDraft[] = [];
 
-  return rows.map((r) => ({
-    id: r.id,
-    kind: r.kind,
-    availableDelta: r.available_delta,
-    escrowDelta: r.escrow_delta,
-    availableAfter: r.available_after,
-    escrowAfter: r.escrow_after,
-    refType: r.ref_type,
-    refId: r.ref_id,
-    memo: r.memo,
-    createdAt: r.created_at,
-  }));
+  constructor(private readonly tx: Tx) {}
+
+  /** Read phase. Every account this batch will touch must be listed here. */
+  async load(userIds: string[]) {
+    for (const userId of new Set(userIds)) {
+      if (this.balances.has(userId)) continue;
+      const doc = await this.tx.get<WalletDoc>(COLLECTIONS.wallets, userId);
+      this.balances.set(
+        userId,
+        doc
+          ? {
+              userId,
+              availableCents: doc.availableCents,
+              escrowCents: doc.escrowCents,
+              currency: doc.currency ?? "USD",
+            }
+          : emptyWallet(userId),
+      );
+    }
+  }
+
+  balance(userId: string): Wallet {
+    const wallet = this.balances.get(userId);
+    if (!wallet) throw new WalletError(`Wallet ${userId} was not loaded into this batch.`, 500);
+    return wallet;
+  }
+
+  private move(
+    userId: string,
+    kind: LedgerKind,
+    availableDelta: number,
+    escrowDelta: number,
+    refType: string | null,
+    refId: string | null,
+    memo: string | null,
+  ) {
+    const wallet = this.balance(userId);
+    const availableAfter = wallet.availableCents + availableDelta;
+    const escrowAfter = wallet.escrowCents + escrowDelta;
+
+    if (availableAfter < 0) throw new WalletError("Not enough available balance.", 402);
+    if (escrowAfter < 0) throw new WalletError("Escrow accounting would go negative.", 500);
+
+    wallet.availableCents = availableAfter;
+    wallet.escrowCents = escrowAfter;
+
+    this.entries.push({
+      id: newId("led"),
+      userId,
+      kind,
+      availableDelta,
+      escrowDelta,
+      availableAfter,
+      escrowAfter,
+      refType,
+      refId,
+      memo,
+      createdAt: nowMs(),
+    });
+  }
+
+  deposit(userId: string, cents: number, refId?: string, memo?: string) {
+    this.move(userId, "deposit", cents, 0, "payment", refId ?? null, memo ?? null);
+  }
+
+  withdraw(userId: string, cents: number, refId?: string, memo?: string) {
+    this.move(userId, "withdrawal", -cents, 0, "payout", refId ?? null, memo ?? null);
+  }
+
+  /** Move a stake out of reach for the duration of a match. */
+  hold(userId: string, cents: number, refId: string, memo?: string) {
+    const wallet = this.balance(userId);
+    if (wallet.availableCents < cents) {
+      throw new WalletError(
+        `You need ${formatCents(cents)} available to stake — you have ${formatCents(wallet.availableCents)}.`,
+        402,
+      );
+    }
+    this.move(userId, "stake_hold", -cents, cents, "wd_match", refId, memo ?? null);
+  }
+
+  /** Give a held stake back: draw, cancellation or expiry. */
+  release(userId: string, cents: number, refId: string, memo?: string) {
+    this.move(userId, "stake_release", cents, -cents, "wd_match", refId, memo ?? null);
+  }
+
+  /** The loser's stake leaves escrow and does not come back. */
+  forfeit(userId: string, cents: number, refId: string, memo?: string) {
+    this.move(userId, "stake_forfeit", 0, -cents, "wd_match", refId, memo ?? null);
+  }
+
+  /** Winnings on top of a released stake. */
+  payout(userId: string, cents: number, refId: string, memo?: string) {
+    this.move(userId, "payout", cents, 0, "wd_match", refId, memo ?? null);
+  }
+
+  rake(cents: number, refId: string, memo?: string) {
+    this.move(HOUSE_ACCOUNT, "rake", cents, 0, "wd_match", refId, memo ?? null);
+  }
+
+  /** Write phase. Balances and ledger rows land together or not at all. */
+  flush() {
+    const at = nowMs();
+    for (const wallet of this.balances.values()) {
+      this.tx.set(COLLECTIONS.wallets, wallet.userId, {
+        availableCents: wallet.availableCents,
+        escrowCents: wallet.escrowCents,
+        currency: wallet.currency,
+        updatedAt: at,
+      });
+    }
+    for (const entry of this.entries) {
+      const { id, ...rest } = entry;
+      this.tx.set(COLLECTIONS.ledger, id, rest);
+    }
+  }
 }
 
-export { formatCents, dollarsToCents } from "./format";
+/**
+ * Runs `fn` inside a Firestore transaction with `userIds` already loaded, then
+ * flushes. Anything that moves money should go through here.
+ */
+export async function withLedger<T>(
+  userIds: string[],
+  fn: (batch: LedgerBatch, tx: Tx) => Promise<T> | T,
+): Promise<T> {
+  const db = await store();
+  return db.runTx(async (tx) => {
+    const batch = new LedgerBatch(tx);
+    await batch.load([...userIds, HOUSE_ACCOUNT]);
+    const result = await fn(batch, tx);
+    batch.flush();
+    return result;
+  });
+}
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * Sorted in memory on purpose: pairing `where` with `orderBy` on a different
+ * field would require a deployed composite index, and this app is meant to run
+ * against a fresh Firestore project with no index setup at all.
+ */
+export async function ledger(userId: string, max = 30): Promise<LedgerEntry[]> {
+  const db = await store();
+  const rows = await db.list<LedgerEntry>(COLLECTIONS.ledger, {
+    where: [["userId", "==", userId]],
+  });
+  return rows.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
+}
+
+export const houseBalance = () => getWallet(HOUSE_ACCOUNT);

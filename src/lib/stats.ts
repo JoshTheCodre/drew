@@ -1,4 +1,5 @@
-import { db } from "./db";
+import "server-only";
+import { COLLECTIONS, store } from "./firestore";
 
 export type ArcadeStats = {
   players: number;
@@ -9,19 +10,27 @@ export type ArcadeStats = {
   predictionsMade: number;
 };
 
-const count = (sql: string, ...args: unknown[]) =>
-  (db.prepare(sql).get(...(args as never[])) as unknown as { n: number }).n;
-
 /** Headline numbers for the arcade home page. */
-export function arcadeStats(): ArcadeStats {
+export async function arcadeStats(): Promise<ArcadeStats> {
+  const db = await store();
+
+  const [players, openRounds, openDuels, predictionsMade, wallets, matches] = await Promise.all([
+    db.count(COLLECTIONS.users),
+    db.count(COLLECTIONS.ppRounds, { where: [["status", "==", "open"]] }),
+    db.count(COLLECTIONS.wdMatches, { where: [["status", "==", "waiting"]] }),
+    db.count(COLLECTIONS.ppPredictions),
+    db.list<{ escrowCents: number }>(COLLECTIONS.wallets),
+    db.list<{ status: string; payoutCents: number | null }>(COLLECTIONS.wdMatches, {
+      where: [["status", "==", "finished"]],
+    }),
+  ]);
+
   return {
-    players: count("SELECT COUNT(*) AS n FROM users"),
-    openRounds: count("SELECT COUNT(*) AS n FROM pp_rounds WHERE status = 'open'"),
-    openDuels: count("SELECT COUNT(*) AS n FROM wd_matches WHERE status = 'waiting'"),
-    stakedCents: count("SELECT COALESCE(SUM(escrow_cents), 0) AS n FROM wallets"),
-    paidOutCents: count(
-      "SELECT COALESCE(SUM(payout_cents), 0) AS n FROM wd_matches WHERE status = 'finished' AND winner_id IS NOT NULL",
-    ),
-    predictionsMade: count("SELECT COUNT(*) AS n FROM pp_predictions"),
+    players,
+    openRounds,
+    openDuels,
+    predictionsMade,
+    stakedCents: wallets.reduce((sum, w) => sum + (w.escrowCents ?? 0), 0),
+    paidOutCents: matches.reduce((sum, m) => sum + (m.payoutCents ?? 0), 0),
   };
 }

@@ -5,6 +5,7 @@ import { activeRounds, leaderboard, tick } from "@/lib/games/price-prediction/en
 import { openChallenges, sweep } from "@/lib/games/wordle-duel/engine";
 import { currentUser } from "@/lib/auth";
 import { arcadeStats } from "@/lib/stats";
+import { nowMs } from "@/lib/clock";
 import { formatCents } from "@/lib/format";
 import { ArcadeLive } from "@/components/ArcadeLive";
 import { Marquee } from "@/components/Marquee";
@@ -17,8 +18,12 @@ export default async function HomePage() {
 
   const user = await currentUser();
   const prices = await getPrices();
-  const top = leaderboard(null, 5);
-  const stats = arcadeStats();
+  const [top, stats, rounds, challenges] = await Promise.all([
+    leaderboard(null, 5),
+    arcadeStats(),
+    activeRounds(user?.id),
+    openChallenges(user?.id),
+  ]);
   const liveGames = GAMES.filter((g) => g.status === "live");
 
   const tiles = [
@@ -99,11 +104,11 @@ export default async function HomePage() {
       <div className="mt-14">
         <ArcadeLive
           initial={{
-            now: Date.now(),
+            now: nowMs(),
             signedIn: Boolean(user),
             markets: MARKETS.map((m) => ({ ...m, price: prices.get(m.id) ?? null })),
-            rounds: activeRounds(user?.id),
-            challenges: openChallenges(user?.id),
+            rounds,
+            challenges,
           }}
         />
       </div>

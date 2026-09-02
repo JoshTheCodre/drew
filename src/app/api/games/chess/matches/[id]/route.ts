@@ -3,14 +3,14 @@ import { fail, json, readJson } from "@/lib/api";
 import { getWallet } from "@/lib/wallet";
 import { nowMs } from "@/lib/clock";
 import {
-  DuelError,
+  ChessError,
   cancelMatch,
-  forfeitMatch,
   joinMatch,
-  submitGuess,
+  playMove,
+  resign,
   sweep,
   viewMatch,
-} from "@/lib/games/wordle-duel/engine";
+} from "@/lib/games/chess/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -20,19 +20,14 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     const { id } = await ctx.params;
     const user = await currentUser();
     const match = await viewMatch(id, user?.id);
-    if (!match) return json({ error: "Match not found." }, { status: 404 });
-    return json({
-      match,
-      now: nowMs(),
-      user,
-      wallet: user ? await getWallet(user.id) : null,
-    });
+    if (!match) return json({ error: "Game not found." }, { status: 404 });
+    return json({ match, now: nowMs(), user, wallet: user ? await getWallet(user.id) : null });
   } catch (error) {
     return fail(error);
   }
 }
 
-/** join | guess | cancel | forfeit */
+/** join | move | resign | cancel */
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params;
@@ -44,24 +39,24 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       case "join":
         await joinMatch(id, user);
         break;
-      case "guess":
-        await submitGuess(id, user.id, String(body.guess ?? ""));
+      case "move":
+        await playMove(id, user.id, {
+          from: String(body.from ?? ""),
+          to: String(body.to ?? ""),
+          promotion: body.promotion ? String(body.promotion) : undefined,
+        });
+        break;
+      case "resign":
+        await resign(id, user.id);
         break;
       case "cancel":
         await cancelMatch(id, user.id);
         break;
-      case "forfeit":
-        await forfeitMatch(id, user.id);
-        break;
       default:
-        throw new DuelError(`Unknown action "${action}".`);
+        throw new ChessError(`Unknown action "${action}".`);
     }
 
-    return json({
-      match: await viewMatch(id, user.id),
-      wallet: await getWallet(user.id),
-      now: nowMs(),
-    });
+    return json({ match: await viewMatch(id, user.id), wallet: await getWallet(user.id), now: nowMs() });
   } catch (error) {
     return fail(error);
   }

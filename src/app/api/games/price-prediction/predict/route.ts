@@ -12,8 +12,8 @@ export async function POST(req: Request) {
     const value = Number(body.value);
     if (!roundId) throw new GameError("Which round are you predicting?");
 
-    submitPrediction(roundId, user.id, value);
-    return json({ round: roundById(roundId, user.id) }, { status: 201 });
+    await submitPrediction(roundId, user, value);
+    return json({ round: await roundById(roundId, user.id) }, { status: 201 });
   } catch (error) {
     return fail(error);
   }

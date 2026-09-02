@@ -1,8 +1,11 @@
+import "server-only";
 import { cookies } from "next/headers";
-import { db, tx } from "./db";
+import { randomBytes } from "node:crypto";
+import { COLLECTIONS, store } from "./firestore";
 import { newId, newToken } from "./ids";
-import { ensureWallet, deposit } from "./wallet";
-import { ageFrom, MIN_AGE, submitVerification } from "./compliance";
+import { nowMs } from "./clock";
+import { withLedger } from "./wallet";
+import { MIN_AGE, ageFrom, runVendorCheck, writeCompliance } from "./compliance";
 
 export const SESSION_COOKIE = "arcade_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
@@ -12,41 +15,57 @@ export const WELCOME_BONUS_CENTS = Number(process.env.WELCOME_BONUS_CENTS ?? 100
 
 export type User = { id: string; username: string; display_name: string; created_at: number };
 
+type UserDoc = { username: string; displayName: string; createdAt: number };
+type SessionDoc = { userId: string; createdAt: number; expiresAt: number };
+
 export class AuthError extends Error {
-  constructor(message: string, readonly status = 400) {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
     super(message);
   }
 }
 
-/** "Drew Oga" -> "drew_oga", plus a numeric suffix if that handle is taken. */
-function handleFor(name: string): string {
-  const base =
+const toUser = (id: string, doc: UserDoc): User => ({
+  id,
+  username: doc.username,
+  display_name: doc.displayName,
+  created_at: doc.createdAt,
+});
+
+/** "Drew Oga" -> "drew_oga" */
+function handleBase(name: string): string {
+  return (
     name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "")
-      .slice(0, 16) || "player";
+      .slice(0, 16) || "player"
+  );
+}
 
-  let candidate = base;
-  let n = 1;
-  while (db.prepare("SELECT 1 AS ok FROM users WHERE username = ?").get(candidate)) {
-    n += 1;
-    candidate = `${base}${n}`.slice(0, 20);
+/** Finds an unclaimed handle. The transaction re-checks before committing. */
+async function proposeHandle(base: string): Promise<string> {
+  const db = await store();
+  for (let n = 1; n <= 20; n++) {
+    const candidate = n === 1 ? base : `${base}${n}`.slice(0, 20);
+    if (!(await db.get(COLLECTIONS.usernames, candidate))) return candidate;
   }
-  return candidate;
+  return `${base}_${randomBytes(2).toString("hex")}`.slice(0, 20);
 }
 
 export type JoinInput = {
   name: string;
   dateOfBirth: string; // YYYY-MM-DD
-  country: string;     // ISO-ish country code or name
+  country: string;
 };
 
 /**
  * The whole sign-up. No password: the session cookie is the account, and the
- * three fields we ask for are the ones the age and region gates need anyway.
+ * three fields we ask for are exactly what the age and region gates need.
  */
-export function joinAsPlayer(input: JoinInput): User {
+export async function joinAsPlayer(input: JoinInput): Promise<User> {
   const name = String(input.name ?? "").trim();
   const dateOfBirth = String(input.dateOfBirth ?? "").trim();
   const country = String(input.country ?? "").trim();
@@ -61,27 +80,32 @@ export function joinAsPlayer(input: JoinInput): User {
   if (age > 120) throw new AuthError("That date of birth doesn't look right.");
   if (!country) throw new AuthError("Pick the country you're playing from.");
 
-  return tx(() => {
-    const user: User = {
-      id: newId("usr"),
-      username: handleFor(name),
-      display_name: name,
-      created_at: Date.now(),
-    };
+  const check = { legalName: name, dateOfBirth, country };
+  const vendor = runVendorCheck(check);
+  if (vendor.status === "rejected") {
+    throw new AuthError(vendor.reason ?? "We couldn't verify those details.", 403);
+  }
 
-    db.prepare(
-      "INSERT INTO users (id, username, display_name, password_hash, created_at) VALUES (?, ?, ?, '', ?)",
-    ).run(user.id, user.username, user.display_name, user.created_at);
+  const base = handleBase(name);
+  const proposed = await proposeHandle(base);
+  const userId = newId("usr");
+  const createdAt = nowMs();
 
-    ensureWallet(user.id);
+  return withLedger([userId], async (batch, tx) => {
+    // Reads first: confirm the handle is still free inside the transaction.
+    const taken = await tx.get(COLLECTIONS.usernames, proposed);
+    const username = taken ? `${base}_${randomBytes(3).toString("hex")}`.slice(0, 20) : proposed;
+
+    const doc: UserDoc = { username, displayName: name, createdAt };
+    tx.set(COLLECTIONS.users, userId, doc);
+    tx.set(COLLECTIONS.usernames, username, { userId, createdAt });
+    writeCompliance(tx, userId, check, vendor);
+
     if (WELCOME_BONUS_CENTS > 0) {
-      deposit(user.id, WELCOME_BONUS_CENTS, "welcome", "Simulated welcome balance");
+      batch.deposit(userId, WELCOME_BONUS_CENTS, "welcome", "Simulated welcome balance");
     }
 
-    // Same simulated vendor the staking gate consults; runs once, here.
-    submitVerification(user.id, { legalName: name, dateOfBirth, country });
-
-    return user;
+    return toUser(userId, doc);
   });
 }
 
@@ -89,39 +113,30 @@ export function joinAsPlayer(input: JoinInput): User {
 /* Sessions                                                            */
 /* ------------------------------------------------------------------ */
 
-export function createSession(userId: string): { id: string; expiresAt: number } {
+export async function createSession(userId: string): Promise<{ id: string; expiresAt: number }> {
+  const db = await store();
   const id = newToken();
-  const now = Date.now();
-  const expiresAt = now + SESSION_TTL_MS;
-  db.prepare("INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)").run(
-    id,
-    userId,
-    now,
-    expiresAt,
-  );
+  const createdAt = nowMs();
+  const expiresAt = createdAt + SESSION_TTL_MS;
+  await db.set(COLLECTIONS.sessions, id, { userId, createdAt, expiresAt } satisfies SessionDoc);
   return { id, expiresAt };
 }
 
-export function destroySession(id: string) {
-  db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+export async function destroySession(id: string) {
+  const db = await store();
+  await db.remove(COLLECTIONS.sessions, id);
 }
 
-export function userForSession(sessionId: string): User | null {
-  const row = db
-    .prepare(
-      `SELECT u.id, u.username, u.display_name, u.created_at, s.expires_at
-         FROM sessions s JOIN users u ON u.id = s.user_id
-        WHERE s.id = ?`,
-    )
-    .get(sessionId) as unknown as (User & { expires_at: number }) | undefined;
-  if (!row) return null;
-  if (row.expires_at < Date.now()) {
-    destroySession(sessionId);
+export async function userForSession(sessionId: string): Promise<User | null> {
+  const db = await store();
+  const session = await db.get<SessionDoc>(COLLECTIONS.sessions, sessionId);
+  if (!session) return null;
+  if (session.expiresAt < nowMs()) {
+    await destroySession(sessionId);
     return null;
   }
-  const { expires_at: _expires, ...user } = row;
-  void _expires;
-  return user;
+  const doc = await db.get<UserDoc>(COLLECTIONS.users, session.userId);
+  return doc ? toUser(session.userId, doc) : null;
 }
 
 /** Current player from the request cookie, or null. */
@@ -135,6 +150,19 @@ export async function requireUser(): Promise<User> {
   const user = await currentUser();
   if (!user) throw new AuthError("Join first — it takes about ten seconds.", 401);
   return user;
+}
+
+/** Lightweight lookups for opponent names, leaderboards and so on. */
+export async function usersById(ids: string[]): Promise<Map<string, User>> {
+  const db = await store();
+  const unique = [...new Set(ids.filter(Boolean))];
+  const found = await Promise.all(
+    unique.map(async (id) => {
+      const doc = await db.get<UserDoc>(COLLECTIONS.users, id);
+      return doc ? toUser(id, doc) : null;
+    }),
+  );
+  return new Map(found.filter((u): u is User => Boolean(u)).map((u) => [u.id, u]));
 }
 
 export function sessionCookieOptions(expiresAt: number) {

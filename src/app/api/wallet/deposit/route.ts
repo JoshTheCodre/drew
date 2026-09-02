@@ -9,7 +9,7 @@ export async function POST(req: Request) {
     const body = await readJson(req);
     const cents = Math.round(Number(body.amountCents));
     const wallet = await makeDeposit(user.id, cents);
-    return json({ wallet, ledger: ledger(user.id, 30) }, { status: 201 });
+    return json({ wallet, ledger: await ledger(user.id, 30) }, { status: 201 });
   } catch (error) {
     return fail(error);
   }
