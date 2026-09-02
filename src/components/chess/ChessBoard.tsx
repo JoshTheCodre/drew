@@ -1,7 +1,7 @@
 "use client";
 
 import { Chess } from "chess.js";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 
@@ -52,8 +52,24 @@ export function ChessBoard({
   onMove: (from: string, to: string, promotion?: string) => void;
   flipped: boolean;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const [promotion, setPromotion] = useState<{ from: string; to: string } | null>(null);
+  /*
+   * Selection is stamped with the position it belongs to, so a move by either
+   * player invalidates it automatically. Deriving this beats clearing it from
+   * an effect, which would render one frame with a stale highlight.
+   */
+  const [selection, setSelection] = useState<{ fen: string; square: string } | null>(null);
+  const [pendingPromotion, setPendingPromotion] = useState<{
+    fen: string;
+    from: string;
+    to: string;
+  } | null>(null);
+
+  const selected = selection?.fen === fen ? selection.square : null;
+  const promotion = pendingPromotion?.fen === fen ? pendingPromotion : null;
+  const setSelected = (square: string | null) =>
+    setSelection(square ? { fen, square } : null);
+  const setPromotion = (move: { from: string; to: string } | null) =>
+    setPendingPromotion(move ? { fen, ...move } : null);
 
   const grid = useMemo(() => parseFen(fen), [fen]);
 
@@ -85,12 +101,6 @@ export function ChessBoard({
     }
     return map;
   }, [fen, yourColour]);
-
-  // Clear any selection when the position changes underneath us.
-  useEffect(() => {
-    setSelected(null);
-    setPromotion(null);
-  }, [fen]);
 
   const targets = selected ? (legalMoves[selected] ?? []) : [];
 
@@ -175,11 +185,13 @@ export function ChessBoard({
                     <span
                       className="grid h-full w-full place-items-center text-[7.5vw] leading-none sm:text-4xl lg:text-5xl"
                       style={{
-                        color: piece.colour === "w" ? "#fbfaff" : "#1c1638",
+                        color: piece.colour === "w" ? "#fbfaff" : "#171232",
+                        // A rim of the opposite tone keeps both sets readable on
+                        // both square colours.
                         textShadow:
                           piece.colour === "w"
-                            ? "0 1px 2px rgba(0,0,0,0.55)"
-                            : "0 1px 1px rgba(255,255,255,0.2)",
+                            ? "0 0 1px rgba(20,14,44,0.9), 0 2px 3px rgba(0,0,0,0.5)"
+                            : "0 0 1px rgba(255,255,255,0.85), 0 2px 3px rgba(0,0,0,0.35)",
                       }}
                     >
                       {GLYPH[piece.type]}

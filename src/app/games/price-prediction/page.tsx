@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { currentUser } from "@/lib/auth";
-import { MARKETS, getPrices } from "@/lib/markets";
+import { MARKETS, readPrices } from "@/lib/markets";
 import {
   activeRounds,
   leaderboard,
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export default async function PricePredictionPage() {
   scheduleHousekeeping();
   const user = await currentUser();
-  const prices = await getPrices();
+  const prices = await readPrices();
 
   const markets = await Promise.all(
     MARKETS.map(async (m) => ({

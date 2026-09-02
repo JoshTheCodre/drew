@@ -1,6 +1,6 @@
 import { currentUser } from "@/lib/auth";
 import { fail, json } from "@/lib/api";
-import { MARKETS, getPrices } from "@/lib/markets";
+import { MARKETS, readPrices } from "@/lib/markets";
 import {
   activeRounds,
   leaderboard,
@@ -17,7 +17,7 @@ export async function GET() {
   try {
     scheduleHousekeeping();
     const user = await currentUser();
-    const prices = await getPrices();
+    const prices = await readPrices();
 
     const markets = await Promise.all(
       MARKETS.map(async (m) => ({

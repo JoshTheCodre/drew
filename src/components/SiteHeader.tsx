@@ -23,10 +23,7 @@ export function SiteHeader({ user }: { user: User | null }) {
 
   // Keep the balance honest as matches settle underneath the player.
   useEffect(() => {
-    if (!user) {
-      setBalance(null);
-      return;
-    }
+    if (!user) return;
     let alive = true;
     const load = async () => {
       try {
@@ -90,7 +87,8 @@ export function SiteHeader({ user }: { user: User | null }) {
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-lime" />
                 <span className="tabular text-sm font-semibold">
-                  {balance === null ? "—" : formatCents(balance)}
+                  {/* Derived, not synced: a signed-out header never shows a stale balance. */}
+                  {user && balance !== null ? formatCents(balance) : "—"}
                 </span>
               </Link>
               <div className="hidden text-right leading-tight sm:block">

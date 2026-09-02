@@ -4,6 +4,7 @@ import { nowMs } from "./clock";
 import { tick } from "./games/price-prediction/engine";
 import { sweep as sweepDuels } from "./games/wordle-duel/engine";
 import { sweep as sweepChess } from "./games/chess/engine";
+import { refreshPrices } from "./markets";
 
 /**
  * Housekeeping — advancing rounds, settling expired matches — used to run on
@@ -41,6 +42,7 @@ function throttle(key: string, job: () => Promise<void>): Promise<void> {
 /** Every job, run inline. Used by /api/cron/tick. */
 export async function runSchedulers(): Promise<void> {
   await Promise.all([
+    refreshPrices().catch((e) => console.error("[schedule:prices]", e)),
     tick().catch((e) => console.error("[schedule:tick]", e)),
     sweepDuels().catch((e) => console.error("[schedule:duels]", e)),
     sweepChess().catch((e) => console.error("[schedule:chess]", e)),
@@ -55,6 +57,7 @@ export function scheduleHousekeeping(): void {
   try {
     after(async () => {
       await Promise.all([
+        throttle("prices", refreshPrices),
         throttle("pp-tick", tick),
         throttle("wd-sweep", sweepDuels),
         throttle("chess-sweep", sweepChess),

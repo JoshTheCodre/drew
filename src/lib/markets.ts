@@ -74,20 +74,37 @@ export async function fetchPrices(
   return out;
 }
 
+/** True when the in-process cache has gone stale enough to refetch. */
+const isStale = (ids: string[], at = nowMs()) =>
+  ids.some((id) => (cache.get(id)?.fetchedAt ?? 0) < at - CACHE_MS);
+
+/** Refreshes the feed if it has gone stale. Safe to call from `after()`. */
+export async function refreshPrices(ids: string[] = MARKETS.map((m) => m.id)): Promise<void> {
+  if (!isStale(ids)) return;
+  try {
+    await fetchPrices(ids);
+  } catch {
+    // the last known price stays in place
+  }
+}
+
 /** Cached read — hits the network at most once per CACHE_MS. */
 export async function getPrices(
   ids: string[] = MARKETS.map((m) => m.id),
 ): Promise<Map<string, number>> {
-  const at = nowMs();
-  const stale = ids.filter((id) => (cache.get(id)?.fetchedAt ?? 0) < at - CACHE_MS);
-  if (stale.length > 0) {
-    try {
-      await fetchPrices(ids);
-    } catch {
-      // fall through to whatever is cached or persisted
-    }
-  }
+  await refreshPrices(ids);
+  return readPrices(ids);
+}
 
+/**
+ * Prices without ever touching the network.
+ *
+ * Rendering a page should not wait on a third-party API: pages read the last
+ * known price, and the scheduler refreshes the feed after the response is sent.
+ */
+export async function readPrices(
+  ids: string[] = MARKETS.map((m) => m.id),
+): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const missing: string[] = [];
   for (const id of ids) {

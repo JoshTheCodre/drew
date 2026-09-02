@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { GAMES } from "@/lib/games/registry";
-import { MARKETS, getPrices } from "@/lib/markets";
+import { MARKETS, readPrices } from "@/lib/markets";
 import { activeRounds, leaderboard } from "@/lib/games/price-prediction/engine";
 import { openChallenges } from "@/lib/games/wordle-duel/engine";
 import { currentUser } from "@/lib/auth";
@@ -17,7 +17,7 @@ export default async function HomePage() {
   scheduleHousekeeping();
 
   const user = await currentUser();
-  const prices = await getPrices();
+  const prices = await readPrices();
 
   /*
    * The home page is the front door: a slow or unreachable database should
@@ -55,8 +55,8 @@ export default async function HomePage() {
         </h1>
 
         <p className="mt-6 max-w-xl text-lg text-muted">
-          Two live games, settled by data instead of opinion. Call the market, or race someone for
-          the pot — no download, no password.
+          {liveGames.length} live games, settled by data instead of opinion. Call the market, or
+          race someone for the pot — no download, no password.
         </p>
 
         <div className="mt-8 flex flex-wrap gap-3">

@@ -54,10 +54,8 @@ export function PricePredictionClient({ initial }: { initial: GameState }) {
     return () => clearInterval(id);
   }, [refresh]);
 
-  useEffect(() => {
-    if (!state.active.some((r) => r.id === selected)) setSelected(state.active[0]?.id ?? "");
-  }, [state.active, selected]);
-
+  // Falls back to the first open round, so a selection that cycles out of the
+  // list resolves on its own — no effect syncing state back into state.
   const round = useMemo(
     () => state.active.find((r) => r.id === selected) ?? state.active[0] ?? null,
     [state.active, selected],
@@ -97,7 +95,7 @@ export function PricePredictionClient({ initial }: { initial: GameState }) {
             onSelect={setSelected}
           />
           {round ? (
-            <RoundPanel round={round} now={now} user={state.user} onDone={refresh} />
+            <RoundPanel key={round.id} round={round} now={now} user={state.user} onDone={refresh} />
           ) : (
             <div className="panel px-6 py-16 text-center text-sm text-dim">
               Opening the next round… hang tight.
@@ -188,12 +186,6 @@ function RoundPanel({
   const open = round.status === "open" && round.locksAt > now;
   const msToLock = round.locksAt - now;
   const msToSettle = round.resolvesAt - now;
-
-  useEffect(() => {
-    setValue("");
-    setError(null);
-    setFlash(null);
-  }, [round.id]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
