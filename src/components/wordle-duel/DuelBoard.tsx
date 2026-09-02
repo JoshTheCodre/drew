@@ -5,10 +5,36 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MatchView } from "@/lib/games/wordle-duel/engine";
 import type { User } from "@/lib/auth";
 import { countdown, formatCents } from "@/lib/format";
-import { Board, Keyboard } from "./Tiles";
+import { Board, FLIP_TOTAL_MS, Keyboard } from "./Tiles";
 
 const POLL_MS = 1500;
 const MAX_GUESSES = 6;
+
+/**
+ * Drives the reveal choreography for one board: when a new row arrives, flip it
+ * open, then bounce it if it solved. The ref starts at the row count we were
+ * handed, so rows that already existed on load don't replay their animation.
+ */
+function useRowReveal(rows: { pattern: string }[]) {
+  const [revealRow, setRevealRow] = useState<number | null>(null);
+  const [bounceRow, setBounceRow] = useState<number | null>(null);
+  const seen = useRef(rows.length);
+
+  useEffect(() => {
+    if (rows.length <= seen.current) return;
+    const index = rows.length - 1;
+    seen.current = rows.length;
+    setRevealRow(index);
+
+    const done = setTimeout(() => {
+      setRevealRow(null);
+      if (rows[index]?.pattern === "ggggg") setBounceRow(index);
+    }, FLIP_TOTAL_MS);
+    return () => clearTimeout(done);
+  }, [rows]);
+
+  return { revealRow, bounceRow };
+}
 
 export function DuelBoard({
   initial,
@@ -24,12 +50,17 @@ export function DuelBoard({
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [shake, setShake] = useState(false);
+  const [jiggleRow, setJiggleRow] = useState<number | null>(null);
   const inFlight = useRef(false);
 
   const isPlayer = match.yourRole !== "spectator";
   const live = match.status === "active";
   const over = match.status === "finished" || match.status === "cancelled";
+
+  const myRows = useMemo(() => match.you?.guesses ?? [], [match.you]);
+  const oppRows = useMemo(() => match.opponent?.guesses ?? [], [match.opponent]);
+  const mine = useRowReveal(myRows);
+  const theirs = useRowReveal(oppRows);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 250);
@@ -50,10 +81,10 @@ export function DuelBoard({
   }, [initial.id]);
 
   useEffect(() => {
-    if (match.status === "finished" || match.status === "cancelled") return;
+    if (over) return;
     const id = setInterval(refresh, POLL_MS);
     return () => clearInterval(id);
-  }, [refresh, match.status]);
+  }, [refresh, over]);
 
   const send = useCallback(
     async (action: string, payload: Record<string, unknown> = {}) => {
@@ -68,9 +99,13 @@ export function DuelBoard({
         const data = await res.json();
         if (!res.ok) {
           setError(data.error ?? "That didn't work.");
-          setShake(true);
-          setTimeout(() => setShake(false), 500);
-          refresh();
+          // 422 is "not in the word list" — jiggle the row and keep the letters.
+          if (res.status === 422) {
+            setJiggleRow(myRows.length);
+            setTimeout(() => setJiggleRow(null), 520);
+          } else {
+            refresh();
+          }
           return false;
         }
         setMatch(data.match);
@@ -82,10 +117,9 @@ export function DuelBoard({
         setBusy(false);
       }
     },
-    [initial.id, refresh],
+    [initial.id, refresh, myRows.length],
   );
 
-  const myRows = useMemo(() => match.you?.guesses ?? [], [match.you]);
   const canGuess = live && isPlayer && !match.you?.solved && myRows.length < MAX_GUESSES;
 
   const submit = useCallback(async () => {
@@ -199,8 +233,7 @@ export function DuelBoard({
               <p className="mt-2 text-sm text-muted">
                 {match.word && (
                   <>
-                    The word was{" "}
-                    <span className="display text-lg text-lime">{match.word}</span>.{" "}
+                    The word was <span className="display text-lg text-lime">{match.word}</span>.{" "}
                   </>
                 )}
                 {match.outcome === "expired" && "Time ran out — both stakes were returned. "}
@@ -211,9 +244,7 @@ export function DuelBoard({
             {isPlayer && match.status === "finished" && (
               <div className="text-right">
                 <div className="text-xs uppercase tracking-widest text-dim">Your result</div>
-                <div
-                  className={`display text-4xl ${drawn ? "text-muted" : youWon ? "text-lime" : "text-bad"}`}
-                >
+                <div className={`display text-4xl ${drawn ? "text-muted" : youWon ? "text-lime" : "text-bad"}`}>
                   {drawn
                     ? formatCents(0)
                     : youWon
@@ -292,25 +323,27 @@ export function DuelBoard({
         <div className="mt-6 grid gap-5 md:grid-cols-[minmax(0,1fr)_auto]">
           <PlayerPanel
             title={isPlayer ? "You" : (match.you?.displayName ?? "Host")}
-            subtitle={
-              isPlayer ? (match.you?.displayName ?? "") : live ? "letters hidden" : "final board"
-            }
-            rows={match.you?.guesses ?? []}
+            subtitle={isPlayer ? (match.you?.displayName ?? "") : live ? "letters hidden" : "final board"}
+            rows={myRows}
             current={isPlayer ? draft : ""}
             masked={!isPlayer && live}
             solved={match.you?.solved ?? false}
             solvedInTurns={match.you?.solvedInTurns ?? null}
             highlight={isPlayer}
-            shake={shake}
+            revealRow={mine.revealRow}
+            bounceRow={mine.bounceRow}
+            jiggleRow={jiggleRow}
           />
           <PlayerPanel
             title={match.opponent?.displayName ?? "Opponent"}
             subtitle={live ? "letters hidden until the end" : "final board"}
-            rows={match.opponent?.guesses ?? []}
+            rows={oppRows}
             masked={live}
             solved={match.opponent?.solved ?? false}
             solvedInTurns={match.opponent?.solvedInTurns ?? null}
             size={isPlayer ? "sm" : "md"}
+            revealRow={theirs.revealRow}
+            bounceRow={theirs.bounceRow}
           />
         </div>
       )}
@@ -355,7 +388,9 @@ function PlayerPanel({
   solvedInTurns,
   size = "md",
   highlight,
-  shake,
+  revealRow,
+  bounceRow,
+  jiggleRow,
 }: {
   title: string;
   subtitle: string;
@@ -366,7 +401,9 @@ function PlayerPanel({
   solvedInTurns: number | null;
   size?: "sm" | "md";
   highlight?: boolean;
-  shake?: boolean;
+  revealRow?: number | null;
+  bounceRow?: number | null;
+  jiggleRow?: number | null;
 }) {
   return (
     <section className={`panel px-5 py-5 ${highlight ? "border-accent/40" : ""}`}>
@@ -379,14 +416,21 @@ function PlayerPanel({
           {solved ? (
             <span className="chip bg-lime/15 text-lime">solved in {solvedInTurns}</span>
           ) : (
-            <span className="tabular text-dim">
-              {rows.length}/6
-            </span>
+            <span className="tabular text-dim">{rows.length}/6</span>
           )}
         </div>
       </div>
-      <div className={`flex justify-center ${shake ? "shake" : ""}`}>
-        <Board rows={rows} current={current} maxGuesses={6} masked={masked} size={size} />
+      <div className="flex justify-center">
+        <Board
+          rows={rows}
+          current={current}
+          maxGuesses={6}
+          masked={masked}
+          size={size}
+          revealRow={revealRow}
+          bounceRow={bounceRow}
+          jiggleRow={jiggleRow}
+        />
       </div>
     </section>
   );

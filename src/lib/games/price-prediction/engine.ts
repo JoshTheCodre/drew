@@ -1,6 +1,5 @@
 import "server-only";
 import { COLLECTIONS, store } from "@/lib/firestore";
-import { newId } from "@/lib/ids";
 import { nowMs } from "@/lib/clock";
 import { MARKETS, fetchPrices, getPrices, marketById, priceHistory } from "@/lib/markets";
 import { bumpLeaderboard, readLeaderboard, type LeaderboardRow } from "@/lib/leaderboard";
@@ -89,22 +88,48 @@ async function predictionsFor(roundId: string): Promise<PredictionRecord[]> {
 /* Round lifecycle                                                     */
 /* ------------------------------------------------------------------ */
 
+const SLOT_MS = (ENTRY_SECONDS + SETTLE_SECONDS) * 1000;
+
+/**
+ * Rounds run on fixed wall-clock slots, and a round's document id is derived
+ * from its market and slot. That makes creation idempotent: every request that
+ * notices a missing round computes the same id, so concurrent ticks converge on
+ * one document instead of racing to create several.
+ */
+function scheduleFor(marketId: string, at: number) {
+  let slot = Math.floor(at / SLOT_MS);
+  // Too late to take entries in this slot? Open the next one instead.
+  if (at > slot * SLOT_MS + ENTRY_SECONDS * 1000) slot += 1;
+
+  const opensAt = slot * SLOT_MS;
+  return {
+    id: `${marketId}_${slot}`,
+    opensAt,
+    locksAt: opensAt + ENTRY_SECONDS * 1000,
+    resolvesAt: opensAt + SLOT_MS,
+  };
+}
+
 async function createRound(marketId: string, openPrice: number | null, at: number) {
   const db = await store();
-  const locksAt = at + ENTRY_SECONDS * 1000;
-  const doc: RoundDoc = {
-    marketId,
-    status: "open",
-    opensAt: at,
-    locksAt,
-    resolvesAt: locksAt + SETTLE_SECONDS * 1000,
-    openPrice,
-    finalPrice: null,
-    resolvedAt: null,
-    attempts: 0,
-    createdAt: at,
-  };
-  await db.set(COLLECTIONS.ppRounds, newId("rnd"), doc);
+  const slot = scheduleFor(marketId, at);
+
+  await db.runTx(async (tx) => {
+    const existing = await tx.get<RoundDoc>(COLLECTIONS.ppRounds, slot.id);
+    if (existing) return; // another request already opened this slot
+    tx.set(COLLECTIONS.ppRounds, slot.id, {
+      marketId,
+      status: "open",
+      opensAt: slot.opensAt,
+      locksAt: slot.locksAt,
+      resolvesAt: slot.resolvesAt,
+      openPrice,
+      finalPrice: null,
+      resolvedAt: null,
+      attempts: 0,
+      createdAt: at,
+    } satisfies RoundDoc);
+  });
 }
 
 /**

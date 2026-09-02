@@ -5,12 +5,17 @@ import { ComplianceError } from "./compliance";
 import { PaymentError } from "./payments";
 import { GameError } from "./games/price-prediction/engine";
 import { DuelError } from "./games/wordle-duel/engine";
+import { ChessError } from "./games/chess/engine";
 
 export const json = <T>(data: T, init?: ResponseInit) => NextResponse.json(data, init);
 
-const KNOWN = [AuthError, WalletError, ComplianceError, PaymentError, GameError, DuelError];
+/**
+ * Domain errors carry a message meant for the player and an HTTP status.
+ * Anything not listed here is a genuine bug, so it becomes a generic 500 and
+ * gets logged rather than leaking internals to the client.
+ */
+const KNOWN = [AuthError, WalletError, ComplianceError, PaymentError, GameError, DuelError, ChessError];
 
-/** Turns known domain errors into clean JSON responses. */
 export function fail(error: unknown) {
   if (KNOWN.some((E) => error instanceof E)) {
     const e = error as Error & { status?: number };

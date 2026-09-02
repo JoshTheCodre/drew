@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Chess } from "chess.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChessView } from "@/lib/games/chess/engine";
 import type { User } from "@/lib/auth";
@@ -22,6 +23,8 @@ export function ChessGame({
   const [now, setNow] = useState(startedNow);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The move you just played, shown before the server confirms it. */
+  const [optimisticFen, setOptimisticFen] = useState<string | null>(null);
   const inFlight = useRef(false);
 
   const isPlayer = match.yourRole !== "spectator";
@@ -75,9 +78,25 @@ export function ChessGame({
         return false;
       } finally {
         setBusy(false);
+        setOptimisticFen(null);
       }
     },
     [initial.id, refresh],
+  );
+
+  /** Move the piece straight away, then let the server confirm or reject it. */
+  const playMove = useCallback(
+    (from: string, to: string, promotion?: string) => {
+      try {
+        const local = new Chess(match.fen);
+        local.move({ from, to, promotion: promotion ?? "q" });
+        setOptimisticFen(local.fen());
+      } catch {
+        // The server is the authority; if the local preview fails, just send it.
+      }
+      void send("move", { from, to, promotion });
+    },
+    [match.fen, send],
   );
 
   const lastMove = match.moves.length ? match.moves[match.moves.length - 1] : null;
@@ -228,14 +247,27 @@ export function ChessGame({
             <SeatBar seat={match.opponent ?? match.guest} clockMs={liveClock(match.opponent)} active={live && match.opponent?.colour === match.turn} />
             <div className="my-3">
               <ChessBoard
-                fen={match.fen}
-                legalMoves={match.legalMoves}
+                fen={optimisticFen ?? match.fen}
                 yourColour={match.yourColour}
+                yourTurn={live && match.yourTurn && !busy}
                 lastMove={lastMove}
-                interactive={live && match.yourTurn && !busy}
+                playable={live && isPlayer}
                 flipped={match.yourColour === "b"}
-                onMove={(from, to, promotion) => send("move", { from, to, promotion })}
+                onMove={playMove}
               />
+              {live && (
+                <p className="mt-3 text-center text-sm">
+                  {match.yourTurn ? (
+                    <span className="font-semibold text-lime">
+                      {match.inCheck ? "You're in check — your move." : "Your move."}
+                    </span>
+                  ) : (
+                    <span className="text-dim">
+                      Waiting for {match.opponent?.displayName ?? "your opponent"}…
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
             <SeatBar seat={match.you ?? match.host} clockMs={liveClock(match.you)} active={live && match.you?.colour === match.turn} you />
             {error && <p className="mt-4 text-center text-sm font-semibold text-bad">{error}</p>}

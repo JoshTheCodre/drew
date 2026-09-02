@@ -149,12 +149,75 @@ body {
   animation: shake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
 }
 
-@keyframes flip-in {
-  0% { transform: rotateX(-90deg); opacity: 0; }
-  100% { transform: rotateX(0); opacity: 1; }
+/* ---------- Wordle tile choreography ---------- */
+
+/* Typing a letter: the tile registers the keystroke with a quick swell. */
+@keyframes tile-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.09); }
+  100% { transform: scale(1); }
 }
-.flip-in {
-  animation: flip-in 0.35s ease-out both;
+.tile-pop {
+  animation: tile-pop 0.11s ease-in-out;
+}
+
+/*
+ * Submitting a guess: each tile turns edge-on, swaps to its colour at the
+ * halfway point where it is invisible, then turns back. --tile-fill is set
+ * per tile so one keyframe serves green, yellow and grey.
+ */
+@keyframes tile-reveal {
+  0% {
+    transform: rotateX(0deg);
+    background: var(--bg-soft);
+    border-color: var(--border);
+    color: var(--text);
+  }
+  49% {
+    transform: rotateX(-90deg);
+    background: var(--bg-soft);
+    border-color: var(--border);
+    color: var(--text);
+  }
+  50% {
+    transform: rotateX(-90deg);
+    background: var(--tile-fill);
+    border-color: var(--tile-fill);
+    color: #fff;
+  }
+  100% {
+    transform: rotateX(0deg);
+    background: var(--tile-fill);
+    border-color: var(--tile-fill);
+    color: #fff;
+  }
+}
+.tile-reveal {
+  animation: tile-reveal 0.5s ease forwards;
+}
+
+/* A word that isn't in the list: the whole row refuses, side to side. */
+@keyframes row-jiggle {
+  10%, 90% { transform: translateX(-2px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-7px); }
+  40%, 60% { transform: translateX(7px); }
+}
+.row-jiggle {
+  animation: row-jiggle 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+/* Solved: the winning row jumps for joy, left to right. */
+@keyframes win-bounce {
+  0%, 20% { transform: translateY(0); }
+  40% { transform: translateY(-26px); }
+  50% { transform: translateY(5px); }
+  60% { transform: translateY(-11px); }
+  80% { transform: translateY(2px); }
+  100% { transform: translateY(0); }
+}
+.win-bounce {
+  animation: win-bounce 0.85s ease both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -162,7 +225,10 @@ body {
   .live-dot,
   .rise,
   .shake,
-  .flip-in {
+  .tile-pop,
+  .tile-reveal,
+  .row-jiggle,
+  .win-bounce {
     animation: none;
   }
 }
