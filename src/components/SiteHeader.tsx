@@ -7,11 +7,11 @@ import type { User } from "@/lib/auth";
 import { formatCents } from "@/lib/format";
 
 const NAV = [
-  { href: "/", label: "Arcade" },
   { href: "/games/price-prediction", label: "Predict" },
-  { href: "/games/wordle-duel", label: "Duel" },
+  { href: "/games/wordle-duel", label: "Wordle" },
   { href: "/games/chess", label: "Chess" },
-  { href: "/leaderboard", label: "Board" },
+  { href: "/wallet", label: "Wallet" },
+  { href: "/leaderboard", label: "Leaderboard" },
 ];
 
 export function SiteHeader({ user }: { user: User | null }) {
@@ -124,7 +124,7 @@ export function SiteHeader({ user }: { user: User | null }) {
 
       {open && (
         <nav className="flex flex-col gap-1 border-t border-line-soft px-6 py-3 md:hidden">
-          {[...NAV, ...(user ? [{ href: "/wallet", label: "Wallet" }] : [])].map((item) => (
+          {NAV.map((item) => (
             <Link
               key={item.href}
               href={item.href}

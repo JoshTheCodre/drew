@@ -1,5 +1,6 @@
 import "server-only";
 import { COLLECTIONS, store } from "./firestore";
+import { nowMs } from "./clock";
 
 export type ArcadeStats = {
   players: number;
@@ -10,8 +11,27 @@ export type ArcadeStats = {
   predictionsMade: number;
 };
 
-/** Headline numbers for the arcade home page. */
+export const EMPTY_STATS: ArcadeStats = {
+  players: 0,
+  openRounds: 0,
+  openDuels: 0,
+  stakedCents: 0,
+  paidOutCents: 0,
+  predictionsMade: 0,
+};
+
+/**
+ * These are decorative headline numbers on the home page, and computing them
+ * touches several collections. Cached briefly so a burst of visitors doesn't
+ * turn into a burst of Firestore reads on every render.
+ */
+const TTL_MS = 30_000;
+const g = globalThis as unknown as { __arcadeStats?: { at: number; value: ArcadeStats } };
+
 export async function arcadeStats(): Promise<ArcadeStats> {
+  const cached = g.__arcadeStats;
+  if (cached && nowMs() - cached.at < TTL_MS) return cached.value;
+
   const db = await store();
 
   const [players, openRounds, openDuels, predictionsMade, wallets, matches] = await Promise.all([
@@ -20,12 +40,12 @@ export async function arcadeStats(): Promise<ArcadeStats> {
     db.count(COLLECTIONS.wdMatches, { where: [["status", "==", "waiting"]] }),
     db.count(COLLECTIONS.ppPredictions),
     db.list<{ escrowCents: number }>(COLLECTIONS.wallets),
-    db.list<{ status: string; payoutCents: number | null }>(COLLECTIONS.wdMatches, {
+    db.list<{ payoutCents: number | null }>(COLLECTIONS.wdMatches, {
       where: [["status", "==", "finished"]],
     }),
   ]);
 
-  return {
+  const value: ArcadeStats = {
     players,
     openRounds,
     openDuels,
@@ -33,4 +53,7 @@ export async function arcadeStats(): Promise<ArcadeStats> {
     stakedCents: wallets.reduce((sum, w) => sum + (w.escrowCents ?? 0), 0),
     paidOutCents: matches.reduce((sum, m) => sum + (m.payoutCents ?? 0), 0),
   };
+
+  g.__arcadeStats = { at: nowMs(), value };
+  return value;
 }

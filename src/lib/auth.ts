@@ -139,11 +139,31 @@ export async function userForSession(sessionId: string): Promise<User | null> {
   return doc ? toUser(session.userId, doc) : null;
 }
 
-/** Current player from the request cookie, or null. */
+/**
+ * Next signals control flow — redirect, notFound, dynamic-usage — by throwing
+ * errors that carry a `digest`. Those must pass straight through any catch.
+ */
+function isFrameworkError(error: unknown): boolean {
+  return typeof (error as { digest?: unknown } | null)?.digest === "string";
+}
+
+/**
+ * Current player from the request cookie, or null.
+ *
+ * Swallows database failures on purpose: the root layout calls this on every
+ * request, so a Firestore blip must degrade to "signed out" rather than take
+ * down every page in the app.
+ */
 export async function currentUser(): Promise<User | null> {
-  const jar = await cookies();
-  const sid = jar.get(SESSION_COOKIE)?.value;
-  return sid ? userForSession(sid) : null;
+  try {
+    const jar = await cookies();
+    const sid = jar.get(SESSION_COOKIE)?.value;
+    return sid ? await userForSession(sid) : null;
+  } catch (error) {
+    if (isFrameworkError(error)) throw error;
+    console.error("[auth] session lookup failed", error);
+    return null;
+  }
 }
 
 export async function requireUser(): Promise<User> {

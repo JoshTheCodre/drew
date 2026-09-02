@@ -109,6 +109,12 @@ export function ChessGame({
     return Math.max(0, seat.clockMs - (running ? elapsed : 0));
   };
 
+  // Players sit at the bottom of their own board; spectators get white below.
+  const white = match.host.colour === "w" ? match.host : match.guest;
+  const black = match.host.colour === "b" ? match.host : match.guest;
+  const bottomSeat = isPlayer ? match.you : (white ?? match.host);
+  const topSeat = isPlayer ? match.opponent : (black ?? match.guest);
+
   const youWon = over && match.winnerId === viewer?.id;
   const drawn = over && !match.winnerId && match.status === "finished";
 
@@ -186,12 +192,26 @@ export function ChessGame({
               </div>
             )}
           </div>
-          <Link
-            href="/games/chess"
-            className="display mt-5 inline-block rounded-2xl bg-lime px-6 py-3 text-bg transition-transform hover:-translate-y-0.5"
-          >
-            Play again
-          </Link>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link
+              href="/games/chess"
+              className="display rounded-2xl bg-lime px-6 py-3 text-bg transition-transform hover:-translate-y-0.5"
+            >
+              Play again
+            </Link>
+            <Link
+              href="/"
+              className="rounded-2xl border border-line px-6 py-3 text-sm font-semibold text-muted transition-colors hover:text-ink"
+            >
+              Home
+            </Link>
+            <Link
+              href="/wallet"
+              className="rounded-2xl border border-line px-6 py-3 text-sm font-semibold text-muted transition-colors hover:text-ink"
+            >
+              Wallet
+            </Link>
+          </div>
         </div>
       )}
 
@@ -244,7 +264,11 @@ export function ChessGame({
       {match.status !== "waiting" && (
         <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
           <div>
-            <SeatBar seat={match.opponent ?? match.guest} clockMs={liveClock(match.opponent)} active={live && match.opponent?.colour === match.turn} />
+            <SeatBar
+              seat={topSeat}
+              clockMs={liveClock(topSeat)}
+              active={live && topSeat?.colour === match.turn}
+            />
             <div className="my-3">
               <ChessBoard
                 fen={optimisticFen ?? match.fen}
@@ -257,7 +281,12 @@ export function ChessGame({
               />
               {live && (
                 <p className="mt-3 text-center text-sm">
-                  {match.yourTurn ? (
+                  {!isPlayer ? (
+                    <span className="text-dim">
+                      {match.turn === "w" ? "White" : "Black"} to move
+                      {match.inCheck ? " · in check" : ""}
+                    </span>
+                  ) : match.yourTurn ? (
                     <span className="font-semibold text-lime">
                       {match.inCheck ? "You're in check — your move." : "Your move."}
                     </span>
@@ -269,7 +298,12 @@ export function ChessGame({
                 </p>
               )}
             </div>
-            <SeatBar seat={match.you ?? match.host} clockMs={liveClock(match.you)} active={live && match.you?.colour === match.turn} you />
+            <SeatBar
+              seat={bottomSeat}
+              clockMs={liveClock(bottomSeat)}
+              active={live && bottomSeat?.colour === match.turn}
+              you={isPlayer}
+            />
             {error && <p className="mt-4 text-center text-sm font-semibold text-bad">{error}</p>}
           </div>
 

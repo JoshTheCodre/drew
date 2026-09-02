@@ -4,7 +4,7 @@ import { MARKETS, getPrices } from "@/lib/markets";
 import { activeRounds, leaderboard, tick } from "@/lib/games/price-prediction/engine";
 import { openChallenges, sweep } from "@/lib/games/wordle-duel/engine";
 import { currentUser } from "@/lib/auth";
-import { arcadeStats } from "@/lib/stats";
+import { arcadeStats, EMPTY_STATS } from "@/lib/stats";
 import { nowMs } from "@/lib/clock";
 import { formatCents } from "@/lib/format";
 import { ArcadeLive } from "@/components/ArcadeLive";
@@ -13,16 +13,21 @@ import { Marquee } from "@/components/Marquee";
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  await tick();
-  sweep();
+  await Promise.all([tick().catch(() => {}), sweep().catch(() => {})]);
 
   const user = await currentUser();
   const prices = await getPrices();
+
+  /*
+   * The home page is the front door: a slow or unreachable database should
+   * degrade it, never blank it. Each section falls back to empty and the page
+   * still renders, so visitors see the arcade instead of an error screen.
+   */
   const [top, stats, rounds, challenges] = await Promise.all([
-    leaderboard(null, 5),
-    arcadeStats(),
-    activeRounds(user?.id),
-    openChallenges(user?.id),
+    leaderboard(null, 5).catch(() => []),
+    arcadeStats().catch(() => EMPTY_STATS),
+    activeRounds(user?.id).catch(() => []),
+    openChallenges(user?.id).catch(() => []),
   ]);
   const liveGames = GAMES.filter((g) => g.status === "live");
 

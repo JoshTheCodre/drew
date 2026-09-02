@@ -88,18 +88,28 @@ export async function getPrices(
     }
   }
 
-  const db = await store();
   const out = new Map<string, number>();
+  const missing: string[] = [];
   for (const id of ids) {
     const hit = cache.get(id);
-    if (hit) {
-      out.set(id, hit.price);
-      continue;
-    }
-    const doc = await db.get<MarketDoc>(COLLECTIONS.markets, id);
-    if (doc) {
-      cache.set(id, { price: doc.price, ts: doc.ts, history: doc.history ?? [], fetchedAt: 0 });
-      out.set(id, doc.price);
+    if (hit) out.set(id, hit.price);
+    else missing.push(id);
+  }
+
+  // Fall back to the last persisted price. A database problem here should cost
+  // us a price, not the whole page.
+  if (missing.length > 0) {
+    try {
+      const db = await store();
+      for (const id of missing) {
+        const doc = await db.get<MarketDoc>(COLLECTIONS.markets, id);
+        if (doc) {
+          cache.set(id, { price: doc.price, ts: doc.ts, history: doc.history ?? [], fetchedAt: 0 });
+          out.set(id, doc.price);
+        }
+      }
+    } catch {
+      // no cached price and no database — the UI renders an em dash
     }
   }
   return out;

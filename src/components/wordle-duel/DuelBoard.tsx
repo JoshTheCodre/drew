@@ -262,10 +262,16 @@ export function DuelBoard({
               Play again
             </Link>
             <Link
+              href="/"
+              className="rounded-2xl border border-line px-6 py-3 text-sm font-semibold text-muted transition-colors hover:text-ink"
+            >
+              Home
+            </Link>
+            <Link
               href="/wallet"
               className="rounded-2xl border border-line px-6 py-3 text-sm font-semibold text-muted transition-colors hover:text-ink"
             >
-              View wallet
+              Wallet
             </Link>
           </div>
         </div>
